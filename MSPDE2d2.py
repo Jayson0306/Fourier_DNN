@@ -31,7 +31,7 @@ from model_distance import *
 
 
 def grad_fun(model_D, XY):
-    DNN = model_D(XY)
+    DNN = model_D(XY).reshape(-1, 1)
     X = torch.reshape(XY[:, 0], shape=[-1, 1])
     grad2DNN = torch.autograd.grad(DNN, XY, grad_outputs=torch.ones_like(X), create_graph=True, retain_graph=True)
     dDNN = grad2DNN[0]
@@ -45,7 +45,7 @@ def grad_fun(model_D, XY):
 
 def grad_fun_nmbd(DNN, XY_bd):
     X = torch.reshape(XY_bd[:, 0], shape=[-1, 1])
-    UNN = DNN(XY_bd)
+    UNN = DNN(XY_bd).reshape(-1, 1)
     grad2UNN = torch.autograd.grad(UNN, XY_bd, grad_outputs=torch.ones_like(X), create_graph=True,
                                    retain_graph=True)
     dUNN = grad2UNN[0]
@@ -146,7 +146,7 @@ class MscaleDNN(tn.Module):
         HXY = GNN + torch.mul(DNN, UNN)
         res1 = dGNN2y + torch.mul(dDNN2y, UNN) + torch.mul(DNN, dUNN2y)
         res2 = dGNN2x + torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
-        res3 = dGNNxx + torch.mul(dDNNxx, UNN) + torch.mul(dDNN2x, dUNN2x) + torch.mul(DNN, dUNNxx)
+        res3 = dGNNxx + torch.mul(dDNNxx, UNN) + 2 * torch.mul(dDNN2x, dUNN2x) + torch.mul(DNN, dUNNxx)
         res = res1 + ws * res2 - ds * res3
         if str.lower(loss_type) == 'l2_loss':
             loss_it = torch.mean(torch.square(res))
@@ -154,7 +154,7 @@ class MscaleDNN(tn.Module):
             loss_it = (1 / scale2lncosh) * torch.mean(torch.log(torch.cosh(scale2lncosh * res)))
         return HXY, loss_it
 
-    def loss_it21DV_set(self, XY=None, loss_type='l2_loss', ws=0.01, ds=0.002, scale2lncosh=0.5,
+    def loss_it21DV_set(self, XY=None, loss_type='l2_loss', ws=0.001, ds=0.002, scale2lncosh=0.5,
                         model_G=None, model_D=None):
         assert (XY is not None)
         # X 是深度 ，Y是时间
@@ -165,10 +165,7 @@ class MscaleDNN(tn.Module):
         X = torch.reshape(XY[:, 0], shape=[-1, 1])
         Y = torch.reshape(XY[:, 1], shape=[-1, 1])
 
-        GNN = torch.zeros_like(Y)
-        dGNN2y = GNN
-        dGNNxx = dGNN2y
-        dGNN2x = dGNNxx
+        DNN, dDNN2x, dDNNxx, dDNN2y = grad_fun(model_D, XY)
 
         # 初始化距离函数的一些值
         # DNN = model_D(XY)
@@ -179,10 +176,6 @@ class MscaleDNN(tn.Module):
         # dDNNxxy = torch.autograd.grad(dDNN2x, XY, grad_outputs=torch.ones_like(X), create_graph=True,
         #                               retain_graph=True)[0]
         # dDNNxx = torch.reshape(dDNNxxy[:, 0], shape=[-1, 1])
-        DNN = model_D(XY)
-        dDNN2x = Y * -1
-        dDNN2y = 2 - X
-        dDNNxx = torch.zeros_like(X)
         # 神经网络的一些值
         # UNN, dUNN2x, dUNNxx, dUNN2y = grad_fun(self.DNN, XY)
         UNN = self.DNN(XY, scale=self.factor2freq, sFourier=self.sFourier)
@@ -193,11 +186,19 @@ class MscaleDNN(tn.Module):
         dUNNxxy = torch.autograd.grad(dUNN2x, XY, grad_outputs=torch.ones_like(X), create_graph=True,
                                       retain_graph=True)[0]
         dUNNxx = torch.reshape(dUNNxxy[:, 0], shape=[-1, 1])
-        HXY = GNN + torch.mul(DNN, UNN)
-        res1 = dGNN2y + torch.mul(dDNN2y, UNN) + torch.mul(DNN, dUNN2y)
-        res2 = dGNN2x + torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
-        res3 = dGNNxx + torch.mul(dDNNxx, UNN) + torch.mul(dDNN2x, dUNN2x) + torch.mul(DNN, dUNNxx)
-        res = res1 + ws * res2 - ds * res3
+        if model_G is not None:
+            GNN, dGNN2x, dGNNxx, dGNN2y = grad_fun(model_G, XY)
+            HXY = GNN + torch.mul(DNN, UNN)
+            res1 = dGNN2y + torch.mul(dDNN2y, UNN) + torch.mul(DNN, dUNN2y)
+            res2 = dGNN2x + torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
+            res3 = dGNNxx + torch.mul(dDNNxx, UNN) + 2 * torch.mul(dDNN2x, dUNN2x) + torch.mul(DNN, dUNNxx)
+            res = res1 + ws * res2 - ds * res3
+        else:
+            HXY = torch.mul(DNN, UNN)
+            res1 = torch.mul(dDNN2y, UNN) + torch.mul(DNN, dUNN2y)
+            res2 = torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
+            res3 = torch.mul(dDNNxx, UNN) +2* torch.mul(dDNN2x, dUNN2x) + torch.mul(DNN, dUNNxx)
+            res = res1 + ws * res2 - ds * res3
         if str.lower(loss_type) == 'l2_loss':
             loss_it = torch.mean(torch.square(res))
         elif str.lower(loss_type) == 'lncosh_loss':
@@ -239,7 +240,7 @@ class MscaleDNN(tn.Module):
         return loss_bd
 
     def loss2bd_neumann_hard_set(self, XY_bd=None, Ubd_exact=None, if_lambda2Ubd=True, loss_type='l2_loss',
-                                 scale2lncosh=0.5, model_D=None):
+                                 scale2lncosh=0.5, model_D=None, model_G=None):
         assert (XY_bd is not None)
         assert (Ubd_exact is not None)
 
@@ -254,24 +255,30 @@ class MscaleDNN(tn.Module):
         else:
             U_bd = Ubd_exact
 
-        dGNN2x = torch.zeros_like(X)
-        # 初始化距离函数的一些值
-        # DNN = model_D(XY_bd)
-        # grad2DNN = torch.autograd.grad(DNN, XY_bd, grad_outputs=torch.ones_like(X), create_graph=True, retain_graph=True)
-        # dDNN = grad2DNN[0]
-        # dDNN2x = torch.reshape(dDNN[:, 0], shape=[-1, 1])
+            # 距离函数的梯度
+        DNN = model_D(XY_bd).reshape(-1, 1)
+        grad2DNN = torch.autograd.grad(DNN, XY_bd, grad_outputs=torch.ones_like(X), create_graph=True,
+                                           retain_graph=True)
+        dDNN = grad2DNN[0]
+        dDNN2x = torch.reshape(dDNN[:, 0], shape=[-1, 1])
 
-        DNN = model_D(XY_bd)
-        dDNN2x = Y * -1
 
         UNN = self.DNN(XY_bd, scale=self.factor2freq, sFourier=self.sFourier)
         grad2UNN = torch.autograd.grad(UNN, XY_bd, grad_outputs=torch.ones_like(X), create_graph=True,
                                        retain_graph=True)
         dUNN = grad2UNN[0]
         dUNN2x = torch.reshape(dUNN[:, 0], shape=[-1, 1])
-
-        diff_bd = dGNN2x + torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
-
+        if model_G is not None:
+            # 拓展函数的梯度
+            GNN = model_G(XY_bd).reshape(-1, 1)
+            grad2GNN = torch.autograd.grad(GNN, XY_bd, grad_outputs=torch.ones_like(X), create_graph=True,
+                                           retain_graph=True)
+            dGNN = grad2GNN[0]
+            dGNN2x = torch.reshape(dGNN[:, 0], shape=[-1, 1])
+            res = dGNN2x + torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
+        else:
+            res = torch.mul(dDNN2x, UNN) + torch.mul(DNN, dUNN2x)
+        diff_bd = res - U_bd
         if str.lower(loss_type) == 'l2_loss':
             loss_bd = torch.mean(torch.square(diff_bd))
         elif str.lower(loss_type) == 'lncosh_loss':
@@ -373,11 +380,10 @@ def solve_Multiscale_PDE(R):
         ds = 0.002
         ws = 0.001
         u_true = lambda x, t: torch.ones_like(x) * 0.01
-        u_left = lambda x, t: torch.ones_like(x) * (p / ds)
+        # u_left = lambda x, t: torch.ones_like(x) * (p / ds)
         # u_left = lambda x, t: torch.ones_like(x) * p
+        u_left = 5
         u_right = lambda x, t: torch.zeros_like(x)
-        u_bottom = lambda x, t: torch.zeros_like(t)
-
         Pretrain_mode = 'import'
         # Pretrain_mode = 'train'
         # Pretrain_mode = 'function'
@@ -385,7 +391,8 @@ def solve_Multiscale_PDE(R):
         if Pretrain_mode == 'import':
             # 1.直接导入模型
             PathG = 'model_G_save2.pth'
-            PathD = 'model_D2.pth'
+            # PathD = 'model_D2.pth'
+            PathD ='model_D_1023.pth'
             model_G = torch.load(PathG)
             model_D = torch.load(PathD)
         elif Pretrain_mode == 'train':
@@ -402,10 +409,15 @@ def solve_Multiscale_PDE(R):
                                          end_time)
             torch.save(model_D, PathD)
         elif Pretrain_mode == 'function':
+            # PathG = 'model_G_save2.pth'
+            # model_G = torch.load(PathG)
             model_G = lambda XY: torch.zeros_like(XY[:, 0])
             # model_D = lambda XY: torch.mul(2 - XY[:, 0], XY[:, 1])
-            model_D = lambda XY: torch.mul(2 - (XY[:, 0]-region_l/(region_r-region_l)), (XY[:, 0]/end_time))
-            # model_D = lambda XY: 2 - XY[:, 0]
+            # model_D = lambda XY: torch.mul(2 - (XY[:, 0]-region_l/(region_r-region_l)), (XY[:, 0]/end_time))
+            model_D = lambda XY: torch.square(XY[:, 1] / end_time)
+            # PathD = 'model_D2.pth'
+            # model_G = torch.load(PathG)
+            # model_D = torch.load(PathD)
 
     mscalednn = MscaleDNN(input_dim=R['input_dim'] + 1, out_dim=R['output_dim'], hidden_layer=R['hidden_layers'],
                           Model_name=R['model2NN'], name2actIn=R['name2act_in'], name2actHidden=R['name2act_hidden'],
@@ -417,6 +429,10 @@ def solve_Multiscale_PDE(R):
             if Pretrain_mode == 'import' or Pretrain_mode == 'train':
                 model_G = model_G.cuda(device='cuda:' + str(R['gpuNo']))
                 model_D = model_D.cuda(device='cuda:' + str(R['gpuNo']))
+            # if Pretrain_mode == 'function':
+            #     model_D = model_D.cuda(device='cuda:' + str(R['gpuNo']))
+
+
 
     params2Net = mscalednn.DNN.parameters()
 
@@ -438,8 +454,8 @@ def solve_Multiscale_PDE(R):
 
     if R['testData_model'] == 'random_generate':
         # 生成测试数据，用于测试训练后的网络
-        test_bach_size = 100
-        size2test = 100
+        test_bach_size = 200
+        size2test = 200
         # test_bach_size = 6400
         # size2test = 80
         # test_bach_size = 10000
@@ -468,26 +484,19 @@ def solve_Multiscale_PDE(R):
 
     test_xy_bach = test_xy_bach.astype(np.float32)
     test_xy_torch = torch.from_numpy(test_xy_bach).reshape(-1, 2)
-    # test_xy_bach.requires_grad_(True)
     if True == R['use_gpu']:
         test_xy_torch = test_xy_torch.cuda(device='cuda:' + str(R['gpuNo']))
 
     t0 = time.time()
     for i_epoch in range(R['max_epoch'] + 1):
         if R['PDE_type'] == '1DV':
-            # xy_it_batch = rand_bd_inside(batchsize_it, input_dim+1, region_l, region_r, init_time, end_time,
-            #                                       to_torch=True, to_float=True, to_cuda=True)
-
             x_in_batch = dataUtilizer2torch.rand_it(batchsize_it, input_dim, region_a=region_l, region_b=region_r,
                                                     to_float=True, to_cuda=R['use_gpu'],
                                                     gpu_no=R['gpuNo'], use_grad2x=True)
             t_in_batch = dataUtilizer2torch.rand_it(batchsize_it, 1, region_a=init_time, region_b=end_time,
                                                     to_float=True, to_cuda=R['use_gpu'],
                                                     gpu_no=R['gpuNo'], use_grad2x=True)
-            # Uin_numpy = u_true(x_in_batch, t_in_batch)  # 训练时精确解的numpy形式
             xy_it_batch = torch.cat([x_in_batch, t_in_batch], -1)
-
-            # xl_bd_batch = rand_nm_bd(batchsize_it, input_dim+1, region_l, region_r, init_time, end_time, to_torch=True)
 
             xl_bd_batch, xr_bd_batch, yb_bd_batch, yt_bd_batch = dataUtilizer2torch.rand_bd_2D1(
                 batchsize_bd, R['input_dim'] + 1, region_a=region_l, region_b=region_r,
@@ -499,21 +508,47 @@ def solve_Multiscale_PDE(R):
             xy_it_batch.requires_grad_(True)
 
         if R['PDE_type'] == '1DV':
+            if R['activate_penalty2bd_increase'] == 1:
+                if i_epoch < int(R['max_epoch'] / 10):
+                    temp_penalty_bd = bd_penalty_init
+                elif i_epoch < int(R['max_epoch'] / 5):
+                    temp_penalty_bd = 10 * bd_penalty_init
+                elif i_epoch < int(R['max_epoch'] / 4):
+                    temp_penalty_bd = 50 * bd_penalty_init
+                elif i_epoch < int(R['max_epoch'] / 2):
+                    temp_penalty_bd = 100 * bd_penalty_init
+                elif i_epoch < int(3 * R['max_epoch'] / 4):
+                    temp_penalty_bd = 200 * bd_penalty_init
+                else:
+                    temp_penalty_bd = 500 * bd_penalty_init
+            else:
+                temp_penalty_bd = bd_penalty_init
             if Pretrain_mode == 'import' or Pretrain_mode == 'train':
                 UNN2train, loss_it = mscalednn.loss_it21DV(XY=xy_it_batch, loss_type=R['loss_type'], model_D=model_D,
-                                                           model_G=model_G)
+                                                           model_G=model_G, ws=ws, ds=ds)
 
                 loss_bd2left = mscalednn.loss2bd_neumann_hard(XY_bd=xl_bd_batch, Ubd_exact=u_left,
-                                                              loss_type=R['loss_type'],
+                                                              loss_type=R['loss_type'],if_lambda2Ubd= False,
                                                               model_G=model_G, model_D=model_D)
+                # loss_bd2right = mscalednn.loss2bd_neumann_hard(XY_bd=xr_bd_batch, Ubd_exact=u_right,
+                #                                               loss_type=R['loss_type'],
+                #                                               model_G=model_G, model_D=model_D)
+                # loss_bd = loss_bd2left + loss_bd2right
+
+                loss_bd = loss_bd2left
             elif Pretrain_mode == 'function':
                 UNN2train, loss_it = mscalednn.loss_it21DV_set(XY=xy_it_batch, loss_type=R['loss_type'],
-                                                               model_D=model_D)
+                                                               model_D=model_D, ws=ws, ds=ds)
                 loss_bd2left = mscalednn.loss2bd_neumann_hard_set(XY_bd=xl_bd_batch, Ubd_exact=u_left,
-                                                                  loss_type=R['loss_type'], model_D=model_D)
-            loss_bd = loss_bd2left
-            # PWB = penalty2WB * mscalednn.get_regularSum2WB()
+                                                                  loss_type=R['loss_type'],
+                                                                  model_D=model_D)
+                loss_bd2right= mscalednn.loss2bd_neumann_hard_set(XY_bd=xr_bd_batch, Ubd_exact=u_right,
+                                                              loss_type=R['loss_type'], model_D=model_D)
+                loss_bd = loss_bd2left + loss_bd2right
+
+            PWB = mscalednn.get_regularSum2WB()
             loss = loss_it + loss_bd
+            # loss = loss_it + temp_penalty_bd * loss_bd + PWB * penalty2WB
             Uexact2train = u_true(torch.reshape(xy_it_batch[:, 0], shape=[-1, 1]),
                                   torch.reshape(xy_it_batch[:, 1], shape=[-1, 1]))
             train_mse = torch.mean(torch.square(UNN2train - Uexact2train))
@@ -540,7 +575,7 @@ def solve_Multiscale_PDE(R):
         if i_epoch % 1000 == 0:
             run_times = time.time() - t0
             tmp_lr = optimizer.param_groups[0]['lr']
-            DNN_tools.print_and_log_train_one_epoch_pinn(i_epoch, run_times, tmp_lr, loss_it.item(), loss_bd.item(),
+            DNN_tools.print_and_log_train_one_epoch_pinn_1(i_epoch, run_times, tmp_lr, loss_it.item(), loss_bd.item(),
                                                          loss.item(), train_mse.item(), train_rel.item(),
                                                          log_out=log_fileout)
 
@@ -650,7 +685,7 @@ if __name__ == "__main__":
     # R['activate_stop'] = int(step_stop_flag)
     R['activate_stop'] = 0
     # if the value of step_stop_flag is not 0, it will activate stop condition of step to kill program
-    R['max_epoch'] = 2000
+    R['max_epoch'] = 7000
     if 0 != R['activate_stop']:
         epoch_stop = input('please input a stop epoch:')
         R['max_epoch'] = int(epoch_stop)
@@ -671,8 +706,8 @@ if __name__ == "__main__":
         R['batch_size2boundary'] = 1000  # 边界训练数据的批大小
 
     # 装载测试数据模式
-    R['testData_model'] = 'load_data'
-    # R['testData_model'] = 'random_generate'
+    # R['testData_model'] = 'load_data'
+    R['testData_model'] = 'random_generate'
 
     R['loss_type'] = 'L2_loss'  # loss类型:L2 loss
     # R['loss_type'] = 'variational_loss'                      # loss类型:PDE变分
@@ -698,8 +733,8 @@ if __name__ == "__main__":
     R['activate_penalty2bd_increase'] = 1
     # R['activate_penalty2bd_increase'] = 0
     # R['init_boundary_penalty'] = 1000                   # Regularization parameter for boundary conditions
-    # R['activate_penalty2init_increase'] = 1
-    R['activate_penalty2init_increase'] = 0
+    R['activate_penalty2init_increase'] = 1
+    # R['activate_penalty2init_increase'] = 0
     R['init_boundary_penalty'] = 100  # Regularization parameter for boundary conditions
     # 网络的频率范围设置
     # R['freq'] = np.concatenate(([1], np.arange(1, 100 - 1)), axis=0)
